@@ -230,6 +230,7 @@ void normal_fill(const TensorBase &self, const scalar_t mean, const scalar_t std
 template<typename RNG>
 void normal_kernel(const TensorBase &self, double mean, double std, RNG generator) {
   auto size = self.numel();
+  fprintf(stderr, "normal_kernel\n");
   if (self.scalar_type() == ScalarType::Float && size >= 16 && self.is_contiguous()) {
 #ifdef CPU_CAPABILITY_AVX2
     normal_fill_AVX2(self, static_cast<float>(mean), static_cast<float>(std), generator);
@@ -238,6 +239,17 @@ void normal_kernel(const TensorBase &self, double mean, double std, RNG generato
 #else
     normal_fill(self, static_cast<float>(mean), static_cast<float>(std), generator);
 #endif
+  } else if (self.scalar_type() == ScalarType::Char) {
+    fprintf(stderr, "normal_kernel ScalarType Char %d\n",(int) self.scalar_type()); fflush(stderr);
+    AT_DISPATCH_ALL_TYPES_AND(kQInt8, self.scalar_type(), "normal_kernel_cpu", [&] {
+      fprintf(stderr, "at dispatch\n"); fflush(stderr);
+      auto iter = TensorIterator::borrowing_nullary_op(self);
+      std::lock_guard<std::mutex> lock(generator->mutex_);
+      cpu_serial_kernel(iter, [mean, std, generator]() -> scalar_t {
+        at::normal_distribution<double> normal(mean, std);
+        return static_cast<scalar_t>(normal(generator));
+      });
+    });
   } else {
     AT_DISPATCH_FLOATING_TYPES_AND2(kHalf, kBFloat16, self.scalar_type(), "normal_kernel_cpu", [&] {
       if (size >= 16 && self.is_contiguous()) {
